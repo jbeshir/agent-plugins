@@ -1,0 +1,11 @@
+{
+  "name": "jbeshir-agent-skills",
+  "version": "0.1.0",
+  "description": "A collection of agent skills for Claude Code",
+  "repository": "https://github.com/jbeshir/agent-skills",
+  "author": {
+    "name": "jbeshir",
+    "url": "https://github.com/jbeshir"
+  },
+  "skills": "./skills/"
+}

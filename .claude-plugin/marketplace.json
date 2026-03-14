@@ -1,0 +1,17 @@
+{
+  "name": "agent-plugins",
+  "owner": {
+    "name": "jbeshir"
+  },
+  "plugins": [
+    {
+      "name": "jbeshir-agent-skills",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/jbeshir/agent-skills.git",
+        "path": "jbeshir-agent-skills"
+      },
+      "description": "A collection of agent skills for Claude Code"
+    }
+  ]
+}
