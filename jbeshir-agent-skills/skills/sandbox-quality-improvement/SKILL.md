@@ -44,7 +44,7 @@ host (you)
 
 ### Step roles
 
-0. **BASELINE** — `sandbox_script`, `image=go`, `egress=none`. Run the project's full gate (`make validate`, golangci-lint, `go test`) against `/workspace/repo` and capture the output. These are the tool-catchable issues; fix them in an early phase (or note them for the fix phases). Everything the gate flags is *off-limits* to the qualitative auditors.
+0. **BASELINE** — `sandbox_script`, `image=go`, `egress=none`. Run the project's **full** gate (`make validate` — formatter, golangci-lint, tests, build) against `/workspace/repo` and capture the output. If the image lacks a required tool, **install it; do not skip the check.** golangci-lint installs through the module-proxy sidecar (so `egress=none` still works): `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (match the major version to the repo's `.golangci.yml`), add `$(go env GOPATH)/bin` to `PATH`, then run the gate. These are the tool-catchable issues; fix them in an early phase (or note them for the fix phases). Everything the gate flags is *off-limits* to the qualitative auditors.
 1. **AUDIT** — parallel `sandbox_agent` reviewers (`name=audit-correctness`, `audit-security`, `audit-design`, `audit-completeness`, `audit-types`), Sonnet. Each reads the codebase (and `git -C /workspace/repo log` for context) and writes `/out/AUDIT-<dim>.md`: a list of findings, **each with file:line, a severity tier (blocking / non-blocking), and a one-line rationale**. They audit only their dimension and must not flag anything the BASELINE gate already covers. Suggested dimensions and what each owns:
    - **correctness** — swallowed/ignored errors, missing error handling at boundaries, races, resource/goroutine leaks, incorrect edge-case logic.
    - **security** — trust-boundary correctness, credential/secret handling, injection surfaces, over-broad permissions. (Tools catch ~50% of vulns — this layer covers the rest.)
@@ -93,7 +93,7 @@ These are the same hard constraints as the feature pipeline — see that skill f
 
 - **Behaviour-preservation is non-negotiable.** Any "improvement" that changes observable behaviour is a feature decision, not a quality fix — route it to the backlog for explicit user sign-off, don't slip it into a fix phase.
 - **Reviewers must cite file:line and stay in their lane.** Without evidence, findings drift into opinion and the loop can churn to game its own verdict. Forbid re-finding gate-catchable nits.
-- **Lint must be in the gate**, not discovered later — a `go build/test`-only gate misses gofmt/gosec/testifylint/etc., and the host backstop will catch the overflow either way, but earlier is cheaper.
+- **Lint must run in the gate** — a `go build/test`-only gate misses gofmt/gosec/testifylint/etc. If the sandbox image lacks golangci-lint (the `golang:1` image does), the gate `go install`s it through the module proxy and runs it; never skip a major check because the tool isn't preinstalled. The host backstop is a second line of defence, not the place lint first runs.
 - **Fix phases share `/workspace`** — keep them sequential against the same tree unless genuinely independent.
 - **Don't over-iterate.** Gains concentrate in rounds 1–2; the 3-round cap plus the "only non-blocking left ⇒ PASS" rule are the convergence guards. Persistent findings at the cap signal a judgment-call gap, not a reason to keep spinning.
 - **Scripts and data work run in demesne, never on the host.** The host runs only routine repo ops (git, make) and the validate-fix backstop.

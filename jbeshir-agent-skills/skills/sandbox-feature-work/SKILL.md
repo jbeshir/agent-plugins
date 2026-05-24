@@ -33,7 +33,7 @@ The orchestrator runs the whole inner pipeline autonomously. You don't drive eac
 1. **RESEARCH** — `sandbox_research`, **isolated**: no `/in`, no `/workspace`, no repo. Open egress + Claude available. It studies the problem from the spec you embed in its prompt (and the open web) and writes `/out/FINDINGS.md`. Isolation is deliberate: research shouldn't touch or depend on the work tree. Anything the researcher must know about the codebase goes in its prompt, because it can't read the repo.
 2. **PLAN** — the orchestrator itself, after reading FINDINGS, decides the numbered implementation phases and writes `/workspace/PLAN.md` including a **handoff contract**: what each phase receives, edits, and leaves for the next. Phases are chosen post-research, not pre-baked by you.
 3. **IMPLEMENT** — one `sandbox_agent` per phase (`name=phase01`, `phase02`, …), Sonnet, editing the **shared** `/workspace/repo`. Each writes `/out/SUMMARY.md`. Phases share the work tree, so they run sequentially unless genuinely independent.
-4. **VALIDATE** — `sandbox_script`, `image=go`, `egress=none`. Runs the project's real checks against `/workspace/repo`. **Must run the project's lint target (`make validate` / golangci-lint), not just `go build/vet/test`** — see constraints.
+4. **VALIDATE** — `sandbox_script`, `image=go`, `egress=none`. Runs the project's **full** gate against `/workspace/repo`: `make validate` (formatter, golangci-lint, tests, build), not just `go build/vet/test`. If the image lacks golangci-lint (the `golang:1` image does), **install it; don't skip the check** — `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` works at `egress=none` through the module-proxy sidecar (match the major version to the repo's `.golangci.yml`), add `$(go env GOPATH)/bin` to `PATH`, then run the gate.
 5. **REVIEW + ITERATE** — `sandbox_agent` (`name=review01`, …) reads `git -C /workspace/repo diff` and judges both code quality and completeness against the spec, writing `/out/REVIEW.md` ending in a verdict line `PASS` or `CHANGES_NEEDED`. On `CHANGES_NEEDED` the orchestrator spawns a fix phase, then re-reviews. **Cap at 3 rounds.**
 6. **FINALIZE** — orchestrator writes `/out/CHANGES.md` (what changed + how it was validated + any caveats) and prints `DONE`.
 
@@ -52,7 +52,7 @@ The orchestrator starts cold with only your prompt and the mounted repo. Treat t
 2. **The full feature spec** plus any **design decisions already seeded** by the user (so phases don't relitigate settled choices).
 3. **The pipeline contract**: spell out the six steps above, the child naming rule, and that research is isolated.
 4. **"Do NOT build, lint, or test yourself — validate via a `go` `sandbox_script` child."** The agent image has no Go toolchain; an orchestrator that tries to compile wastes turns failing. Validation is a child's job (and the host's).
-5. **The VALIDATE command explicitly**, including the lint target (e.g. "run `make validate`"), not just `go build && go test`.
+5. **The VALIDATE command explicitly** — the full gate including lint (e.g. "install golangci-lint via `go install`, then run `make validate`"), not just `go build && go test`.
 6. **Files to study** — point it at the key files/dirs so it doesn't waste a research budget rediscovering structure.
 7. **The handoff contract requirement** — tell it to write `/workspace/PLAN.md` and have each phase honour it strictly.
 8. **Already-ruled-out facts** — anything you've investigated and disproven. This stops the orchestrator re-treading dead ends (e.g. "the X timeout is not the cause; MCP_TOOL_TIMEOUT defaults to ~27h").
@@ -72,7 +72,7 @@ The sandbox validation is necessary but **not sufficient** — trust the host, n
 
 ## Constraints and known issues
 
-- **Lint slips through sandbox validation.** A `go build/vet/test`-only VALIDATE step misses gofmt/gosec/testifylint/errorlint/etc. nits that golangci-lint catches. Always have VALIDATE run the lint target; the host backstop catches the rest.
+- **Lint must run in the gate, not just on the host.** A `go build/vet/test`-only VALIDATE step misses gofmt/gosec/testifylint/errorlint/etc. nits golangci-lint catches. If the image lacks golangci-lint, the gate `go install`s it (through the module proxy, so `egress=none` is fine) and runs it — never skip a major check because the tool isn't preinstalled. The host backstop is a second line of defence, not where lint first runs.
 - **Don't trust pipeline/background exit codes** (see backstop step 3). Read logs.
 - **Research is isolated by design** — it has no repo access. If the researcher needs codebase facts, put them in its prompt.
 - **Phases share `/workspace`** — they collide if run in parallel against the same tree. Keep them sequential unless independent. (Parallel phases via git-worktree-per-phase is a known future improvement enabled by keeping `.git`, not yet standard.)
