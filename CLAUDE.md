@@ -5,6 +5,13 @@
 - Issue shell commands separately rather than chaining with `&&` or `;`. This makes failures easier to identify and tool calls easier to review.
 - Avoid multiline commands where possible.
 
+## Demesne (sandboxed execution)
+
+Demesne is an MCP server exposing sandboxed execution. Prefer it over running things directly on the host.
+
+- **Scripts and data work run in demesne, never on the host.** Any bash script, Python script, local file parsing, data analysis, data transformation, or similar ad-hoc compute should run via `sandbox_script` (one-shot) or `sandbox_agent` (when it needs an agent) — not on the host. Mount the inputs read-only and read results back from the returned `/out`. Routine repo operations (git, `make` targets, builds) and the validate-fix step below still run on the host.
+- **Code changes go through an orchestrated pipeline.** For non-trivial code changes, propose a demesne pipeline rather than editing directly: an Opus `sandbox_agent` orchestrator that runs explore → research → plan → orchestrator-determined numbered implementation phases → a validate-fix loop. Validation currently happens on the host (the agent image has no Go toolchain): the orchestrator leaves the edited tree in the shared `/workspace` plus a `/out/CHANGES.md`, and the host runs the real build/lint/test, feeding any failures back into a fix pass until green.
+
 ## Code Standards
 
 - Names should make sense from the current code alone — don't encode history (e.g. no `RecommendEnhanced` because the old `Recommend` was removed). Let git remember the history.

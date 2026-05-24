@@ -1,12 +1,22 @@
 ---
 name: uplift-docs
-description: Uplift non-code documentation for a project. Writes or updates a README with a service summary, key domain concepts, and mermaid diagrams (architecture, dependencies, data flow). Adds or updates an OpenAPI spec for services exposing APIs.
+description: Refresh project-level documentation (README + OpenAPI spec) so it accurately reflects the current codebase. Apply when the user asks to uplift, refresh, regenerate, or update the docs / README / OpenAPI spec, or after a structural change makes existing docs stale. Produces a README with service summary, key concepts, and mermaid architecture / dependency / data-flow diagrams; produces or updates an OpenAPI 3.1 spec for projects that expose an HTTP API. Triggers include "uplift docs", "refresh the README", "regenerate documentation", "add architecture diagrams", "update the OpenAPI spec". Skip for code-level docs (godoc, docstrings, inline comments) and for in-progress feature work where the code itself is still in flux.
 allowed-tools: Read, Glob, Grep, Bash, Write, Edit, Agent
 ---
 
-You are performing a documentation uplift on this project. Your goal is to produce high-quality, accurate non-code documentation by deeply understanding the codebase first, then dispatching parallel subagents to write the documentation artifacts.
+Refresh project-level documentation for this project: a README (summary, key concepts, mermaid diagrams) and, if the project exposes an HTTP API, an OpenAPI 3.1 spec. Phase 1 builds a single shared codebase analysis; Phase 2 hands that analysis to two parallel subagents that write the artifacts.
 
-Work through the following phases in order.
+## Guardrails
+
+These apply throughout every phase:
+
+- **No fabrication.** Don't describe components, dependencies, endpoints, fields, or behaviour without grepping the codebase first. If you can't confirm it exists, don't write it. This is the dominant failure mode for docs-generation skills.
+- **Validate every diagram with the mermaid MCP server.** For each diagram, call `mcp__mermaid__generate` on the source. Look at the rendered output and iterate until it renders cleanly and conveys what you intended. Don't commit a diagram you haven't seen render.
+- **Diagrams must fit GitHub's render width.** ≤12 nodes per diagram; prefer `TD` over `LR`; keep node labels short; no `style` directives setting fill/stroke colours (they break in light or dark mode).
+- **Treat stale content as stale.** When updating an existing README or spec, sections that contradict current code should be rewritten, not preserved. Git remembers the old version.
+- **Use "docs" consistently.** Avoid drifting between "documentation", "non-code documentation", "doc", etc.
+
+Work through the phases below in order.
 
 ## Phase 1: Codebase Analysis
 
@@ -33,7 +43,7 @@ Launch a general-purpose Agent with the following prompt (include your Phase 1 s
 
 ---
 
-You are writing or updating the README.md for this project. Here is a detailed analysis of the codebase:
+Write or update `README.md` for this project. Here is a detailed analysis of the codebase:
 
 <codebase-analysis>
 {YOUR PHASE 1 SUMMARY HERE}
@@ -95,7 +105,7 @@ Launch a general-purpose Agent with the following prompt (include your Phase 1 s
 
 ---
 
-You are reviewing and writing the OpenAPI specification for this project. Here is a detailed analysis of the codebase:
+Write or update the OpenAPI specification for this project. Here is a detailed analysis of the codebase:
 
 <codebase-analysis>
 {YOUR PHASE 1 SUMMARY HERE}
@@ -136,6 +146,15 @@ After writing the spec:
 
 ---
 
-## Phase 3: Summary
+## Phase 3: Report
 
-After both subagents complete, provide a brief summary of what was created or updated, and flag any areas where you were uncertain or where the documentation would benefit from human review.
+After both subagents complete, summarise the outcome in three labelled sections. Omit any section that's empty.
+
+**Created / updated**
+- One bullet per artifact (`README.md`, `openapi.yaml`, etc.) with a one-line description of what changed.
+
+**Skipped**
+- Things you considered and chose not to do (e.g. "no OpenAPI spec — project does not expose an HTTP API"; "did not add ER diagram — no persistent data model"). One line for the decision, one line for the reason.
+
+**Flagged for human review**
+- Anywhere you were uncertain — naming choices, ambiguous behaviour, places the codebase didn't unambiguously answer the question. Brief, so the user knows what to verify.
