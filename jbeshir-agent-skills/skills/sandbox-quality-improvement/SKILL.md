@@ -36,15 +36,16 @@ host (you)
       5. GATE       sandbox_script image=go: re-run to green per phase │
       6. RE-REVIEW  sandbox_agent review01 … reads git diff, verdict   │
                     PASS / CHANGES_NEEDED (≤3 rounds)                  │
-      7. FINALIZE   /out/CHANGES.md + /out/BACKLOG.md (non-blocking)   │
+      7. FINALIZE   commits work on a branch; CHANGES.md + BACKLOG.md │
                                                                       │
- └─ host validate-fix loop  ◀── reads /workspace + /out/CHANGES.md ───┘
-      make validate / go vet -tags integration; fix to green; commit.
+ └─ host landing  ◀──── git fetch <workspace>/repo <branch> ─────────┘
+      ff-merge into target; one cheap in-repo `make validate`
+      re-check + `make test-integration`; integrate when asked.
 ```
 
 ### Step roles
 
-0. **BASELINE** — `sandbox_script`, `image=go`, `egress=none`. Run the project's **full** gate (`make validate` — formatter, golangci-lint, tests, build) against `/workspace/repo` and capture the output. If the image lacks a required tool, **install it; do not skip the check.** golangci-lint installs through the module-proxy sidecar (so `egress=none` still works): `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` (match the major version to the repo's `.golangci.yml`), add `$(go env GOPATH)/bin` to `PATH`, then run the gate. These are the tool-catchable issues; fix them in an early phase (or note them for the fix phases). Everything the gate flags is *off-limits* to the qualitative auditors.
+0. **BASELINE** — `sandbox_script`, `image=go`, `egress=none`. Run the project's **full** gate (`make validate` — formatter, golangci-lint, tests, build) against `/workspace/repo` and capture the output. Run the lint check via the repo's own target; **never skip a major check because the tool isn't preinstalled.** The right mechanism is `go tool` (go.mod `tool` directives, Go 1.24+): `go tool golangci-lint run` builds the exact version pinned in `go.mod`, fetched through the module-proxy sidecar (so `egress=none` works) — identical in sandbox, host, and CI, no `@latest` drift. If the repo doesn't yet declare its tools that way, adopting `go tool` is itself a worthwhile completeness fix (see landing note). These are the tool-catchable issues; fix them in an early phase (or note them for the fix phases). Everything the gate flags is *off-limits* to the qualitative auditors.
 1. **AUDIT** — parallel `sandbox_agent` reviewers (`name=audit-correctness`, `audit-security`, `audit-design`, `audit-completeness`, `audit-types`), Sonnet. Each reads the codebase (and `git -C /workspace/repo log` for context) and writes `/out/AUDIT-<dim>.md`: a list of findings, **each with file:line, a severity tier (blocking / non-blocking), and a one-line rationale**. They audit only their dimension and must not flag anything the BASELINE gate already covers. Suggested dimensions and what each owns:
    - **correctness** — swallowed/ignored errors, missing error handling at boundaries, races, resource/goroutine leaks, incorrect edge-case logic.
    - **security** — trust-boundary correctness, credential/secret handling, injection surfaces, over-broad permissions. (Tools catch ~50% of vulns — this layer covers the rest.)
@@ -56,7 +57,7 @@ host (you)
 4. **FIX** — one `sandbox_agent` per phase (`name=fix01` …), Sonnet, editing the shared `/workspace/repo`. **Behaviour-preserving**: a fix that changes observable behaviour is out of scope — it gets flagged in `BACKLOG.md`, not applied. Each writes `/out/SUMMARY.md`.
 5. **GATE** — re-run the deterministic gate (step 0's script) after each fix phase or batch. Must be green before review. Green tests are the proof behaviour was preserved.
 6. **RE-REVIEW + ITERATE** — `sandbox_agent` (`name=review01` …) reads `git -C /workspace/repo diff`, judges whether the applied fixes are correct, complete, and didn't introduce new issues, and writes `/out/REVIEW.md` ending in a verdict line `PASS` or `CHANGES_NEEDED`. On `CHANGES_NEEDED` (blocking only) spawn another fix phase and re-review. **Cap at 3 rounds.** If a round yields only non-blocking findings, that's a PASS — push them to the backlog, don't loop.
-7. **FINALIZE** — orchestrator writes `/out/CHANGES.md` (what changed, how it was validated, behaviour-preservation note) and `/out/BACKLOG.md` (non-blocking findings + anything deferred as behaviour-changing), then prints `DONE`.
+7. **FINALIZE** — the orchestrator commits the validated work as one or more commits on a branch in `/workspace/repo`, branched from the mounted HEAD (e.g. `pipeline/<short-task>`), writes `/out/CHANGES.md` (what changed, how it was validated, the **branch name**, behaviour-preservation note) and `/out/BACKLOG.md` (non-blocking findings + anything deferred as behaviour-changing), then prints `DONE`. Committing on a branch is what makes host landing a fetch rather than a patch-apply.
 
 ## Definition of "good standing" (terminal state)
 
@@ -77,7 +78,7 @@ The orchestrator starts cold with only your prompt and the mounted repo. Brief i
 4. **"Do NOT build, lint, or test yourself — run the gate via a `go` `sandbox_script` child."** The agent image has no Go toolchain.
 5. **The exact gate command** (e.g. "run `make validate`"), including the lint target — not just `go build && go test`.
 6. **Severity discipline**: every finding needs file:line + tier; only blocking findings drive fix/re-review cycles; "good standing with a backlog" is the goal, not zero nits.
-7. **Output contract**: `/out/AUDIT-<dim>.md`, `/workspace/ISSUES.md`, `/workspace/PLAN.md`, per-phase `/out/SUMMARY.md`, `/out/REVIEW.md` with a `PASS`/`CHANGES_NEEDED` line, final `/out/CHANGES.md` + `/out/BACKLOG.md` + `DONE`.
+7. **Output contract**: `/out/AUDIT-<dim>.md`, `/workspace/ISSUES.md`, `/workspace/PLAN.md`, per-phase `/out/SUMMARY.md`, `/out/REVIEW.md` with a `PASS`/`CHANGES_NEEDED` line, the validated work **committed on a branch** in `/workspace/repo`, and final `/out/CHANGES.md` (naming that branch) + `/out/BACKLOG.md` + `DONE`.
 
 ## Pipeline mechanics (shared with sandbox-feature-work)
 
@@ -87,13 +88,13 @@ These are the same hard constraints as the feature pipeline — see that skill f
 - Orchestrator on **Opus**; auditors / fixers / reviewers on **Sonnet**.
 - Tell it to **copy the repo whole, including `.git`** (`/in/<repo>` → `/workspace/repo`) so reviewers get `git diff`/`git log`.
 - **Child names must be lowercase DNS-1123 labels** (lowercase letters, digits, interior hyphens, ≤40 chars): `audit-design`, `fix01`, `review02`.
-- **Host backstop, and read logs not exit codes.** When the orchestrator returns, run the *real* gate on the host (`make validate`, `go vet -tags integration`), read the log (a trailing command can mask a `make` failure with exit 0), feed failures back, re-validate to green, then commit when the user asks.
+- **Minimal host landing, and read logs not exit codes.** The in-sandbox `make validate` is the authoritative gate; the host does not re-run the full loop. When the orchestrator returns, read `/out/CHANGES.md` for the branch name, **land via branch fetch** (`git -C <repo> fetch <workspace>/repo <branch>` then `git merge --ff-only FETCH_HEAD`), run **one cheap in-repo `make validate`** re-check plus the host-only `make test-integration` (read the log — a trailing command can mask a `make` failure with exit 0), then integrate/commit when the user asks. See sandbox-feature-work's "Host-side landing" for the full treatment and the `go tool` pinning rationale.
 
 ## Constraints and known issues
 
 - **Behaviour-preservation is non-negotiable.** Any "improvement" that changes observable behaviour is a feature decision, not a quality fix — route it to the backlog for explicit user sign-off, don't slip it into a fix phase.
 - **Reviewers must cite file:line and stay in their lane.** Without evidence, findings drift into opinion and the loop can churn to game its own verdict. Forbid re-finding gate-catchable nits.
-- **Lint must run in the gate** — a `go build/test`-only gate misses gofmt/gosec/testifylint/etc. If the sandbox image lacks golangci-lint (the `golang:1` image does), the gate `go install`s it through the module proxy and runs it; never skip a major check because the tool isn't preinstalled. The host backstop is a second line of defence, not the place lint first runs.
+- **Lint must run in the gate** — a `go build/test`-only gate misses gofmt/gosec/testifylint/etc. The `golang:1` image lacks golangci-lint, so run it via `go tool golangci-lint` (pinned in `go.mod`, fetched through the module proxy at `egress=none`); never skip a major check because the tool isn't preinstalled, and never use `@latest` (it drifts between sandbox and host). The in-sandbox gate is authoritative; the host re-check is a second line of defence, not the place lint first runs.
 - **Fix phases share `/workspace`** — keep them sequential against the same tree unless genuinely independent.
 - **Don't over-iterate.** Gains concentrate in rounds 1–2; the 3-round cap plus the "only non-blocking left ⇒ PASS" rule are the convergence guards. Persistent findings at the cap signal a judgment-call gap, not a reason to keep spinning.
-- **Scripts and data work run in demesne, never on the host.** The host runs only routine repo ops (git, make) and the validate-fix backstop.
+- **Scripts and data work run in demesne, never on the host.** The host runs only the minimal landing: a `git fetch` + ff-merge, one cheap `make validate` re-check, and the host-only integration tests.
