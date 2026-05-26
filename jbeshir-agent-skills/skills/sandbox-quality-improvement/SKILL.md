@@ -36,9 +36,9 @@ host (you)
       5. GATE       sandbox_script image=go: re-run to green per phase │
       6. RE-REVIEW  sandbox_agent review01 … reads git diff, verdict   │
                     PASS / CHANGES_NEEDED (≤3 rounds)                  │
-      7. FINALIZE   commits work on a branch; CHANGES.md + BACKLOG.md │
+      7. FINALIZE   commit on branch; cp → /out/repo; CHANGES+BACKLOG│
                                                                       │
- └─ host landing  ◀──── git fetch <workspace>/repo <branch> ─────────┘
+ └─ host landing  ◀──── git fetch <output_dir>/repo <branch> ────────┘
       ff-merge into target; one cheap in-repo `make validate`
       re-check + `make test-integration`; integrate when asked.
 ```
@@ -57,7 +57,7 @@ host (you)
 4. **FIX** — one `sandbox_agent` per phase (`name=fix01` …), Sonnet, editing the shared `/workspace/repo`. **Behaviour-preserving**: a fix that changes observable behaviour is out of scope — it gets flagged in `BACKLOG.md`, not applied. Each writes `/out/SUMMARY.md`.
 5. **GATE** — re-run the deterministic gate (step 0's script) after each fix phase or batch. Must be green before review. Green tests are the proof behaviour was preserved.
 6. **RE-REVIEW + ITERATE** — `sandbox_agent` (`name=review01` …) reads `git -C /workspace/repo diff`, judges whether the applied fixes are correct, complete, and didn't introduce new issues, and writes `/out/REVIEW.md` ending in a verdict line `PASS` or `CHANGES_NEEDED`. On `CHANGES_NEEDED` (blocking only) spawn another fix phase and re-review. **Cap at 3 rounds.** If a round yields only non-blocking findings, that's a PASS — push them to the backlog, don't loop.
-7. **FINALIZE** — the orchestrator commits the validated work as one or more commits on a branch in `/workspace/repo`, branched from the mounted HEAD (e.g. `pipeline/<short-task>`), writes `/out/CHANGES.md` (what changed, how it was validated, the **branch name**, behaviour-preservation note) and `/out/BACKLOG.md` (non-blocking findings + anything deferred as behaviour-changing), then prints `DONE`. Committing on a branch is what makes host landing a fetch rather than a patch-apply.
+7. **FINALIZE** — the orchestrator commits the validated work as one or more commits on a branch in `/workspace/repo`, branched from the mounted HEAD (e.g. `pipeline/<short-task>`). It then **copies the committed repo into its own `/out`** so the host can reach it: `cp -a /workspace/repo /out/repo`, run **by the orchestrator itself** (plain `cp`, no toolchain needed) — *not* via a `sandbox_script` child, whose `/out` is `/out/child/<name>` and would strand the repo there. `/workspace` is torn down when the orchestrator exits; only `/out` (the returned `output_dir`) is persisted to the host, so the branch must live in a repo under `/out`. Finally it writes `/out/CHANGES.md` (what changed, how it was validated, the **branch name**, behaviour-preservation note) and `/out/BACKLOG.md` (non-blocking findings + anything deferred as behaviour-changing), then prints `DONE`. Committing on a branch is what makes host landing a fetch rather than a patch-apply.
 
 ## Definition of "good standing" (terminal state)
 
@@ -78,7 +78,7 @@ The orchestrator starts cold with only your prompt and the mounted repo. Brief i
 4. **"Do NOT build, lint, or test yourself — run the gate via a `go` `sandbox_script` child."** The agent image has no Go toolchain.
 5. **The exact gate command** (e.g. "run `make validate`"), including the lint target — not just `go build && go test`.
 6. **Severity discipline**: every finding needs file:line + tier; only blocking findings drive fix/re-review cycles; "good standing with a backlog" is the goal, not zero nits.
-7. **Output contract**: `/out/AUDIT-<dim>.md`, `/workspace/ISSUES.md`, `/workspace/PLAN.md`, per-phase `/out/SUMMARY.md`, `/out/REVIEW.md` with a `PASS`/`CHANGES_NEEDED` line, the validated work **committed on a branch** in `/workspace/repo`, and final `/out/CHANGES.md` (naming that branch) + `/out/BACKLOG.md` + `DONE`.
+7. **Output contract**: `/out/AUDIT-<dim>.md`, `/workspace/ISSUES.md`, `/workspace/PLAN.md`, per-phase `/out/SUMMARY.md`, `/out/REVIEW.md` with a `PASS`/`CHANGES_NEEDED` line, the validated work **committed on a branch** and **copied to `/out/repo`** by the orchestrator itself, and final `/out/CHANGES.md` (naming that branch) + `/out/BACKLOG.md` + `DONE`.
 
 ## Pipeline mechanics (shared with sandbox-feature-work)
 
@@ -88,7 +88,7 @@ These are the same hard constraints as the feature pipeline — see that skill f
 - Orchestrator on **Opus**; auditors / fixers / reviewers on **Sonnet**.
 - Tell it to **copy the repo whole, including `.git`** (`/in/<repo>` → `/workspace/repo`) so reviewers get `git diff`/`git log`.
 - **Child names must be lowercase DNS-1123 labels** (lowercase letters, digits, interior hyphens, ≤40 chars): `audit-design`, `fix01`, `review02`.
-- **Minimal host landing, and read logs not exit codes.** The in-sandbox `make validate` is the authoritative gate; the host does not re-run the full loop. When the orchestrator returns, read `/out/CHANGES.md` for the branch name, **land via branch fetch** (`git -C <repo> fetch <workspace>/repo <branch>` then `git merge --ff-only FETCH_HEAD`), run **one cheap in-repo `make validate`** re-check plus the host-only `make test-integration` (read the log — a trailing command can mask a `make` failure with exit 0), then integrate/commit when the user asks. See sandbox-feature-work's "Host-side landing" for the full treatment and the `go tool` pinning rationale.
+- **Minimal host landing, and read logs not exit codes.** The in-sandbox `make validate` is the authoritative gate; the host does not re-run the full loop. When the orchestrator returns, read `/out/CHANGES.md` for the branch name, **land via branch fetch from the run's `output_dir`** (`git -C <repo> fetch <output_dir>/repo <branch>` then `git merge --ff-only FETCH_HEAD`) — `/workspace` is gone, so `<output_dir>/repo` (the orchestrator's own copy) is the only host-reachable source; if it's missing, look under `<output_dir>/child/<name>/repo`. Then run **one cheap in-repo `make validate`** re-check plus the host-only `make test-integration` (read the log — a trailing command can mask a `make` failure with exit 0), then integrate/commit when the user asks. See sandbox-feature-work's "Host-side landing" for the full treatment and the `go tool` pinning rationale.
 
 ## Constraints and known issues
 

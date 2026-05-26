@@ -20,9 +20,9 @@ host (you)
       4. VALIDATE    sandbox_script image=go: full `make validate`    │
                      — the authoritative deterministic gate           │
       5. REVIEW      sandbox_agent review01, review02, … (≤3 rounds)  │
-      6. FINALIZE    commits work on a branch; /out/CHANGES.md + DONE │
+      6. FINALIZE    commit on branch; cp → /out/repo; CHANGES + DONE│
                                                                       │
- └─ host landing  ◀──── git fetch <workspace>/repo <branch> ─────────┘
+ └─ host landing  ◀──── git fetch <output_dir>/repo <branch> ────────┘
       ff-merge into target; one cheap in-repo `make validate`
       re-check + `make test-integration`; integrate when asked.
 ```
@@ -36,7 +36,7 @@ The orchestrator runs the whole inner pipeline autonomously. You don't drive eac
 3. **IMPLEMENT** — one `sandbox_agent` per phase (`name=phase01`, `phase02`, …), Sonnet, editing the **shared** `/workspace/repo`. Each writes `/out/SUMMARY.md`. Phases share the work tree, so they run sequentially unless genuinely independent.
 4. **VALIDATE** — `sandbox_script`, `image=go`, `egress=none`. This is the **authoritative deterministic gate**, not a dry run the host repeats. Runs the project's **full** gate against `/workspace/repo`: `make validate` (formatter, golangci-lint, tests, build), not just `go build/vet/test`. The `golang:1` image lacks golangci-lint, so the gate must provide it — **never skip the check**. Run it via `go tool golangci-lint` (go.mod `tool` directives, Go 1.24+): the version is pinned in `go.mod` and built/fetched through the module-proxy sidecar, so it works at `egress=none` and is identical to host and CI. Don't use `go install ...@latest` (it drifts — see landing note).
 5. **REVIEW + ITERATE** — `sandbox_agent` (`name=review01`, …) reads `git -C /workspace/repo diff` and judges both code quality and completeness against the spec, writing `/out/REVIEW.md` ending in a verdict line `PASS` or `CHANGES_NEEDED`. On `CHANGES_NEEDED` the orchestrator spawns a fix phase, then re-reviews. **Cap at 3 rounds.**
-6. **FINALIZE** — the orchestrator commits the validated work as one or more commits on a branch in `/workspace/repo`, branched from the mounted HEAD (e.g. `pipeline/<short-task>`), writes `/out/CHANGES.md` (what changed, how it was validated, the **branch name**, any caveats), and prints `DONE`. Committing on a branch is what makes host landing a fetch rather than a patch-apply.
+6. **FINALIZE** — the orchestrator commits the validated work as one or more commits on a branch in `/workspace/repo`, branched from the mounted HEAD (e.g. `pipeline/<short-task>`). It then **copies the committed repo into its own `/out`** so the host can reach it: `cp -a /workspace/repo /out/repo`, run **by the orchestrator itself** (plain `cp`, no toolchain needed) — *not* via a `sandbox_script` child, whose `/out` is `/out/child/<name>` and would strand the repo there. `/workspace` is torn down when the orchestrator exits; only `/out` (the returned `output_dir`) is persisted to the host, so the branch must live in a repo under `/out`. Finally it writes `/out/CHANGES.md` (what changed, how it was validated, the **branch name**, any caveats) and prints `DONE`. Committing on a branch is what makes host landing a fetch rather than a patch-apply.
 
 ## Launching the orchestrator
 
@@ -57,7 +57,7 @@ The orchestrator starts cold with only your prompt and the mounted repo. Treat t
 6. **Files to study** — point it at the key files/dirs so it doesn't waste a research budget rediscovering structure.
 7. **The handoff contract requirement** — tell it to write `/workspace/PLAN.md` and have each phase honour it strictly.
 8. **Already-ruled-out facts** — anything you've investigated and disproven. This stops the orchestrator re-treading dead ends (e.g. "the X timeout is not the cause; MCP_TOOL_TIMEOUT defaults to ~27h").
-9. **Output contract**: `/out/FINDINGS.md`, per-phase `/out/SUMMARY.md`, `/out/REVIEW.md` with a `PASS`/`CHANGES_NEEDED` verdict line, the validated work **committed on a branch** in `/workspace/repo`, and a final `/out/CHANGES.md` (naming that branch) + `DONE`.
+9. **Output contract**: `/out/FINDINGS.md`, per-phase `/out/SUMMARY.md`, `/out/REVIEW.md` with a `PASS`/`CHANGES_NEEDED` verdict line, the validated work **committed on a branch** and **copied to `/out/repo`** by the orchestrator itself, and a final `/out/CHANGES.md` (naming that branch) + `DONE`.
 
 Terse prompts produce shallow pipelines. Over-specify the contract; under-specify the solution.
 
@@ -66,9 +66,10 @@ Terse prompts produce shallow pipelines. Over-specify the contract; under-specif
 The in-sandbox `make validate` is the authoritative deterministic gate. The host does **not** re-run the full build/lint/test loop or apply patches — it lands the orchestrator's branch and does one cheap confirmation. Keeping this small is the point: every host command is a potential approval prompt.
 
 1. Read `/out/CHANGES.md` for the branch name and a summary.
-2. **Land via branch fetch.** The shared workspace is a real git repo on the host, so fetch the orchestrator's branch from it and fast-forward into your target branch:
-   - `git -C <repo> fetch <workspace>/repo <branch>`
+2. **Land via branch fetch from `output_dir`.** The orchestrator left the committed repo at `<output_dir>/repo` (`output_dir` is the host path the run returned). `/workspace` is gone — `/out` is the only persisted location — so fetch from there and fast-forward your target branch:
+   - `git -C <repo> fetch <output_dir>/repo <branch>`
    - `git -C <repo> merge --ff-only FETCH_HEAD` — the branch descends from the HEAD the sandbox copied, so this is a clean fast-forward. This preserves the sandbox's commits; no patch-apply, no re-copy.
+   - **Fallback:** if `<output_dir>/repo` is absent (an orchestrator that copied via a child instead of itself), the repo is under `<output_dir>/child/<name>/repo` — find the one whose `git log` carries the branch and fetch from there.
 3. **One cheap in-repo re-check.** Run `make validate` once in the real repo as a backstop, in-repo via the project's own target (not ad-hoc `go` commands). With tool versions pinned (below) this is a formality that passes first time; a failure means a version/environment gap to fix, not routine churn. **Read the log, not the exit code** — a trailing command can mask an earlier `make` failure with a 0 exit.
 4. **Integration tests.** Run the project's host-only integration target (`make test-integration`) — the one check the sandbox can't do (it needs real podman + `.env`).
 5. Manual quality pass (the `CLAUDE.md` checks); integrate/commit when the user asks.
