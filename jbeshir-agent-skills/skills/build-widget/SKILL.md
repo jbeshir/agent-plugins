@@ -10,9 +10,9 @@ Repo: `jbeshir/beshir-widgets`, cloned at `/home/jbeshir/code/beshir-widgets`. E
 - `LIBRARIES.md` — the curated, sized library menu and the "How To Choose" guidance.
 - `DATA.md` — the per-widget data contract (`static` / `prebake` / `live`).
 
-**Default stack:** **Preact core** runtime; **Observable Plot** for chart-like widgets. Aim for a genuinely polished result — prettiness-first within a **~100–150 KB gzip** budget. Drop to the lightweight tier (Preact + modular D3/SVG, ~19 KB) only as a deliberate choice when bytes matter. For non-chart widgets (simulation, geometry/graphs, animation), pick from `LIBRARIES.md`.
+**Default stack:** **Preact core** runtime; **Observable Plot** for chart-like widgets. Optimize for the best result, not bundle size — ~400 KB gzip is a comfortable ceiling, and larger is fine when it's the best fit (show a loading state if it's big or waits on data). For non-chart widgets (simulation, physics, geometry/graphs, animation, drag/interaction), pick the best-in-class tool from `LIBRARIES.md`.
 
-**Watch out:** Every widget must be **fully self-contained** — no runtime CDN/external `<script>`/`<link>`, everything bundled by Vite — because the E2E render runs at `egress=none` and the widget must work embedded anywhere. The orchestrator must `cp -a /workspace/repo /out/repo` itself (a `sandbox_script` child writes only to `/out/child/<name>`). `/workspace` is torn down on exit; only `/out` persists.
+**Watch out:** Every widget must **render offline** in dev and the E2E render (which runs at `egress=none`) — bundle the code, and data widgets ship a committed `sample` (see `DATA.md`). Production may fetch at runtime (live data, map tiles), but the offline render must still pass, so give remote data a loading state. The orchestrator must `cp -a /workspace/repo /out/repo` itself (a `sandbox_script` child writes only to `/out/child/<name>`). `/workspace` is torn down on exit; only `/out` persists.
 
 ## The repo's per-widget convention
 
@@ -55,7 +55,7 @@ The agent build/validate/render lanes can never reach the open web — only the 
 - **`directories: ["/home/jbeshir/code/beshir-widgets"]` is mandatory.** Without it the orchestrator wakes with no repo.
 - Tier: **slow** orchestrator; **medium** implement/polish/review phases; the `validate`/`render` children are `sandbox_script` (no tier — `image=node` / `image=browser`).
 - Tell it explicitly: **do NOT build, validate, or render yourself** — the agent image has no Node toolchain or browser; those are `sandbox_script` children.
-- Restate the grounding facts (Workers Static Assets, `custom_domain: true` auto-DNS, iframe `_headers`, `base: './'`, self-contained/`egress=none`, the `#widget-ready` marker, the default stack) and that `LIBRARIES.md`/`DATA.md` are the authority for stack and data choices.
+- Restate the grounding facts (Workers Static Assets, `custom_domain: true` auto-DNS, iframe `_headers`, `base: './'`, offline render at `egress=none`, the `#widget-ready` marker, the default stack) and that `LIBRARIES.md`/`DATA.md` are the authority for stack and data choices.
 
 ## Writing the orchestrator prompt
 
