@@ -28,12 +28,12 @@ The track is **progressive**. Tutorial N assumes the reader has read 1…N−1, 
 
 ## Resolving the target widget (host prep)
 
-The user names a widget by `<slug>` or by an open widget PR. Get the right code into the clone **before** launching the orchestrator, because the orchestrator copies the clone whole into `/workspace/repo`:
+The user names a widget by `<slug>` or by an open widget PR. Make the **base ref** the orchestrator branches from available in the clone **before** launching it (it copies the clone whole into `/workspace/repo` and branches from the ref inside its copy) — **checkout-free, so the host working tree is never switched and concurrent tutorial/widget pipelines don't block each other**:
 
-- **Merged / on `main`:** `git -C /home/jbeshir/code/beshir-widgets switch main`, then `git -C … pull --ff-only`. The mounted HEAD is `main`.
-- **An open widget PR:** check the PR is still open and **not already merged** (`gh pr view <n> --json state,headRefName,mergedAt`). If merged, treat as the merged case. If open, check out its branch so the widget's source and the tutorial's base are that branch (`git -C … fetch origin <headRef>`, `git -C … switch <headRef>`); the tutorial will append to it so they review and merge together.
+- **Merged / on `main`:** `git -C /home/jbeshir/code/beshir-widgets fetch origin main`. Base ref = `origin/main`.
+- **An open widget PR:** check the PR is still open and **not already merged** (`gh pr view <n> --json state,headRefName,mergedAt`). If merged, treat as the merged case. If open, fetch its branch (no checkout): `git -C … fetch origin <headRef>`. Base ref = `origin/<headRef>` — the tutorial branches from and is pushed back onto it so they review and merge together.
 
-Confirm the widget exists at `widgets/<slug>/`. Derive the file number (next free in `tutorials/frontend/`) — or let the orchestrator derive it from the directory; state your expectation either way.
+Capture the host commit identity to hand the orchestrator (`git -C … config user.name` / `user.email`), so the in-sandbox commit is authored correctly and the host needs no re-author. Confirm the widget exists on the base ref: `git -C … ls-tree --name-only <base-ref> widgets/<slug>/`. The orchestrator derives the file number (next free in `tutorials/frontend/`) from its copy.
 
 ## Pipeline stages
 
@@ -58,7 +58,7 @@ Then the orchestrator commits the tutorial on a branch (see Launching), runs `cp
 - **`directories: ["/home/jbeshir/code/beshir-widgets"]` is mandatory.** Without it the orchestrator wakes with no repo. It copies the clone (incl. `.git`) into `/workspace/repo` and runs the stages there.
 - Tier: **slow** orchestrator (`agent=claude-code model=opus` when driving Claude); **medium** outline/section/stitch/review children; research is `sandbox_research` (isolated, open egress).
 - This pipeline writes **markdown only** — there is nothing to build, validate, or render. Don't add a build gate. Reference accuracy is enforced in the review stage by checking excerpts against `/workspace/repo` source.
-- Brief the orchestrator as a complete document: the widget slug and what it does; the per-track curriculum and the `## Concepts introduced` ledger (read prior tutorials' ledgers to get the known-set; teach only new ground, link the rest); the tutorial's target arc (below); the five stages with the child-naming rule, that research is isolated and repo-blind, and that there is **one section child per outline section**; and the output contract (`/out/FINDINGS.md`, `/out/OUTLINE.md`, `/out/REVIEW.md` with a verdict line, `/out/repo` with branch `tutorial/frontend-<slug>`, `/out/CHANGES.md`, `DONE`). Set git identity to `Pipeline <pipeline@local>`, branch `tutorial/frontend-<slug>` from the mounted HEAD, single commit.
+- Brief the orchestrator as a complete document: the widget slug and what it does; the per-track curriculum and the `## Concepts introduced` ledger (read prior tutorials' ledgers to get the known-set; teach only new ground, link the rest); the tutorial's target arc (below); the five stages with the child-naming rule, that research is isolated and repo-blind, and that there is **one section child per outline section**; and the output contract (`/out/FINDINGS.md`, `/out/OUTLINE.md`, `/out/REVIEW.md` with a verdict line, `/out/repo` with branch `tutorial/frontend-<slug>`, `/out/CHANGES.md`, `DONE`). Pass it the **base ref** (`origin/main`, or `origin/<headRef>` for an open widget PR) and the **host commit identity** (`user.name`/`user.email`). It must check out the base ref in its copy to read the widget source, set git identity to the host identity, branch `tutorial/frontend-<slug>` from that base ref (**not** the mounted working-tree HEAD), and make a single commit authored as the host.
 
 ### Target arc for the tutorial
 
@@ -86,11 +86,9 @@ Adapt to the widget; lead with its new ground:
 
 ## Host-side landing + PR
 
-The in-sandbox review is authoritative; the host does not re-run the pipeline.
+The in-sandbox review is authoritative; the host does not re-run the pipeline. The landing is **checkout-free** — it only creates a branch ref and pushes, never switching the working tree — so it can't collide with another pipeline's in-flight work.
 
 1. Read `/out/CHANGES.md` for the branch (`tutorial/frontend-<slug>`), base commit, and tutorial path.
-2. Fetch and create the branch locally: `git -C /home/jbeshir/code/beshir-widgets fetch <output_dir>/repo tutorial/frontend-<slug>` then `git -C … switch -c tutorial/frontend-<slug> FETCH_HEAD` (fallback: `<output_dir>/child/<name>/repo` if `<output_dir>/repo` is absent).
-3. Re-author the commit with the host identity: `git -C … commit --amend --reset-author --no-edit`.
-4. Push: `git -C … push -u origin tutorial/frontend-<slug>`.
-5. **Merged widget:** open a PR to `main` with `mcp__github__create_pull_request` — body: which widget, the live URL, the concepts it newly introduces. **Open widget PR:** instead of a fresh PR, push the tutorial commit onto the widget's branch (the mounted HEAD was that branch) so it joins the existing PR — re-confirm the PR is open and unmerged before pushing.
-6. Give the user the PR URL.
+2. Create the branch ref locally **without touching the working tree**: `git -C /home/jbeshir/code/beshir-widgets fetch <output_dir>/repo "+tutorial/frontend-<slug>:refs/heads/tutorial/frontend-<slug>"` (fallback: `<output_dir>/child/<name>/repo` if `<output_dir>/repo` is absent). The commit is already authored as the host identity, so there is no re-author step.
+3. **Merged widget:** push the branch and open a PR — `git -C … push -u origin tutorial/frontend-<slug>`, then `mcp__github__create_pull_request` to `main` (body: which widget, the live URL, the concepts it newly introduces). **Open widget PR:** re-confirm the PR is open and unmerged, then fast-forward the tutorial commit onto the widget's branch so it joins the existing PR — `git -C … push origin "tutorial/frontend-<slug>:<headRef>"` (no local switch).
+4. Give the user the PR URL.
